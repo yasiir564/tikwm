@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 import requests
 import re
 import logging
@@ -9,7 +9,9 @@ from functools import wraps
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+# Configure CORS properly with specific options
+CORS(app, resources={r"/api/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], 
+                               "allow_headers": ["Content-Type", "Authorization"]}})
 
 # Configure logging
 logging.basicConfig(
@@ -169,15 +171,21 @@ def fetch_from_tikwm(url):
         logger.error(f'Error with TikWM API: {e}')
         return None
 
-@app.route('/api/tiktok/v1/download', methods=['POST', 'OPTIONS'])
+# Route to handle preflight CORS OPTIONS requests explicitly
+@app.route('/api/tiktok/v1/download', methods=['OPTIONS'])
+def options_handler():
+    response = make_response()
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    response.headers.add('Access-Control-Max-Age', '86400')  # 24 hours
+    return response
+
+@app.route('/api/tiktok/v1/download', methods=['POST'])
 def download_tiktok():
     """
     REST API endpoint to download TikTok videos
     """
-    # Handle preflight CORS OPTIONS request
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     logger.info('TikTok downloader request received')
     
     # Get request body
@@ -216,7 +224,7 @@ def download_tiktok():
     if tikwm_result and tikwm_result.get('video_url'):
         logger.info('Successfully extracted video info using TikWM API')
         
-        return jsonify({
+        response = jsonify({
             'success': True,
             'video_url': tikwm_result['video_url'],
             'cover_url': tikwm_result.get('cover_url', ''),
@@ -224,14 +232,40 @@ def download_tiktok():
             'desc': tikwm_result.get('desc', ''),
             'video_id': tikwm_result.get('video_id', ''),
             'method': 'tikwm'
-        }), 200
+        })
+        
+        # Add CORS headers to ensure they are included in the response
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 200
     
     # If method fails, return error
     logger.error(f'Error: TikWM download method failed for URL: {tiktok_url}')
-    return jsonify({
+    response = jsonify({
         'success': False,
         'error': 'Failed to download TikTok video. Please try a different video or URL format.'
-    }), 500
+    })
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response, 500
+
+# Add a separate route for the root path
+@app.route('/', methods=['GET'])
+def index():
+    return jsonify({
+        'status': 'running',
+        'message': 'TikTok Downloader API is active'
+    }), 200
+
+# Add a health check endpoint
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': int(time.time())
+    }), 200
 
 if __name__ == '__main__':
-    app.run(debug=os.environ.get('DEBUG') == 'true', host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    port = int(os.environ.get('PORT', 5000))
+    debug_mode = os.environ.get('DEBUG') == 'true'
+    
+    logger.info(f'Starting TikTok Downloader API on port {port} (debug={debug_mode})')
+    app.run(debug=debug_mode, host='0.0.0.0', port=port)
